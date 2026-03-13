@@ -30,7 +30,7 @@ pip install kronos-engine
 
 Or clone and install locally:
 ```bash
-git clone https://github.com/YOUR_USERNAME/kronos.git
+git clone https://github.com/walkwithmanyu/kronos.git
 cd kronos
 pip install -e .
 ```
@@ -203,6 +203,6 @@ MIT — use it, fork it, ship it.
 
 ## Built by NASCORP
 
-Kronos was extracted from [PostOffice](https://github.com/YOUR_USERNAME/postoffice), a local business operations platform. It grew into a standalone tool because we needed to stress test an entire month of client pipeline activity before going live.
+Kronos was extracted from [PostOffice](https://github.com/walkwithmanyu/postoffice), a local business operations platform. It grew into a standalone tool because we needed to stress test an entire month of client pipeline activity before going live.
 
 If you build something with it, open a PR with your scenario in `examples/`.
