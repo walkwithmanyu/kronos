@@ -135,6 +135,60 @@ Prints the full timeline with real-clock offsets — no DB writes, no API calls.
 
 ---
 
+## Adding preflight checks
+
+Preflight checks run before the simulation starts. They scan your integrations,
+show a status table, and ask for confirmation. If any check fails, the run is blocked.
+
+```python
+from kronos import Kronos
+import requests, pathlib, json
+
+def build(k: Kronos):
+    # Register checks with k.add_check(label, fn)
+    # fn must return ("ok"|"warn"|"fail", "detail string")
+
+    def check_db():
+        if not pathlib.Path("myapp.db").exists():
+            return "fail", "myapp.db not found"
+        return "ok", "database reachable"
+
+    def check_api():
+        try:
+            r = requests.get("https://api.example.com/ping", timeout=5)
+            return ("ok", "API reachable") if r.ok else ("fail", f"HTTP {r.status_code}")
+        except Exception as e:
+            return "warn", str(e)
+
+    def check_token():
+        p = pathlib.Path("token.json")
+        if not p.exists():
+            return "fail", "token.json missing"
+        scopes = json.loads(p.read_text()).get("scopes", [])
+        if "https://example.com/auth/send" not in scopes:
+            return "warn", "missing send scope"
+        return "ok", "token valid"
+
+    k.add_check("Database", check_db)
+    k.add_check("API",      check_api)
+    k.add_check("Token",    check_token)
+
+    # ... then schedule your events as normal
+    k.schedule(1, 9, "First event", my_fn)
+```
+
+Run preflight without simulating:
+```bash
+kronos preflight my_scenario.py
+```
+
+Skip preflight when you're confident everything is working:
+```bash
+kronos run my_scenario.py --skip-preflight
+```
+
+---
+
 ## Chaining multiple scenarios
 
 ```python

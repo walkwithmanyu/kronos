@@ -6,7 +6,7 @@ Zero external dependencies. Copy this file into any project.
 import time
 from datetime import datetime, timedelta
 from threading import Thread
-from typing import Callable, List, Optional
+from typing import Callable, List, Optional, Tuple
 
 
 class KronosEvent:
@@ -33,6 +33,38 @@ class KronosEvent:
         return f"KronosEvent(day={self.sim_day}, hour={self.sim_hour:.1f}, desc={self.description!r})"
 
 
+class KronosCheck:
+    """
+    A single preflight check.
+
+    Pass a zero-argument callable that returns (status, detail):
+        status : "ok" | "warn" | "fail"
+        detail : short string shown in the preflight table
+
+    Example
+    -------
+    >>> def check_db():
+    ...     import sqlite3, pathlib
+    ...     if not pathlib.Path("myapp.db").exists():
+    ...         return "fail", "myapp.db not found"
+    ...     return "ok", "database reachable"
+    ...
+    >>> KronosCheck("Database", check_db)
+    """
+
+    def __init__(self, label: str, func: Callable):
+        self.label = label
+        self.func = func
+
+    def run(self) -> Tuple[str, str, str]:
+        """Returns (label, status, detail)."""
+        try:
+            status, detail = self.func()
+            return self.label, status, str(detail)
+        except Exception as exc:
+            return self.label, "fail", str(exc)
+
+
 class Kronos:
     """
     Time-compression engine.
@@ -45,6 +77,15 @@ class Kronos:
     >>> k = Kronos(real_minutes=60, sim_days=32)
     >>> k.schedule(day=1, hour=9, description="User signs up", func=my_signup_fn)
     >>> k.run()
+
+    Adding preflight checks
+    -----------------------
+    >>> def check_api():
+    ...     r = requests.get("https://api.example.com/ping", timeout=5)
+    ...     return ("ok", "reachable") if r.ok else ("fail", f"HTTP {r.status_code}")
+    ...
+    >>> k.add_check("API", check_api)
+    >>> k.run()   # preflight runs automatically before simulation
     """
 
     def __init__(
@@ -64,6 +105,7 @@ class Kronos:
         self.real_secs = real_minutes * 60
         self.total_sim_secs = sim_days * 86400
         self.events: List[KronosEvent] = []
+        self.checks: List[KronosCheck] = []
         self.errors: List[dict] = []
         self.state: dict = {}
 
@@ -94,13 +136,111 @@ class Kronos:
         self.events.sort(key=lambda e: e.sim_offset_seconds)
         return self
 
+    def add_check(self, label: str, func: Callable) -> "Kronos":
+        """
+        Register a preflight check. func() must return (status, detail).
+        status: 'ok' | 'warn' | 'fail'
+        Returns self for chaining.
+        """
+        self.checks.append(KronosCheck(label, func))
+        return self
+
+    # ── preflight ─────────────────────────────────────────────
+
+    def preflight(self, ask: bool = True) -> bool:
+        """
+        Run all registered preflight checks.
+        Prints a status table and optionally asks the user to confirm.
+
+        Parameters
+        ----------
+        ask : bool
+            If True, prompt the user before returning True.
+            Set to False in automated/CI environments.
+
+        Returns
+        -------
+        bool — True to proceed, False to abort.
+        """
+        if not self.checks:
+            return True     # nothing to check, proceed
+
+        results = [c.run() for c in self.checks]
+        fatals  = sum(1 for _, s, _ in results if s == "fail")
+        warns   = sum(1 for _, s, _ in results if s == "warn")
+
+        ICON = {"ok": "✅", "warn": "⚠️ ", "fail": "❌"}
+        W    = 42
+        SEP  = "─" * 62
+
+        print()
+        print(f"  ┌{SEP}┐")
+        print(f"  │  {'KRONOS PREFLIGHT':<60}│")
+        print(f"  ├{SEP}┤")
+
+        for label, status, detail in results:
+            icon = ICON.get(status, "  ")
+            pad  = 20 - len(label)
+            print(f"  │  {icon}  {label}{' ' * pad}{detail[:W]:<{W}}│")
+
+        print(f"  ├{SEP}┤")
+
+        if fatals == 0 and warns == 0:
+            print(f"  │  {'All systems go — ready to simulate.':<60}│")
+            verdict = "go"
+        elif fatals == 0:
+            print(f"  │  {f'{warns} warning(s) — some features may be limited.':<60}│")
+            verdict = "warn"
+        else:
+            print(f"  │  {f'{fatals} critical issue(s) — fix before running.':<60}│")
+            verdict = "fail"
+
+        print(f"  └{SEP}┘")
+        print()
+
+        if verdict == "fail":
+            print("  ❌  Preflight failed. Fix the issues above and try again.\n")
+            return False
+
+        if not ask:
+            return True
+
+        if verdict == "warn":
+            print("  ⚠️   Some features will be limited.\n")
+
+        try:
+            answer = input("  Proceed with simulation? [Y/n] ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print("\n  Aborted.")
+            return False
+
+        if answer in ("", "y", "yes"):
+            print()
+            return True
+
+        print("\n  Simulation cancelled.\n")
+        return False
+
     # ── execution ─────────────────────────────────────────────
 
-    def run(self) -> dict:
+    def run(self, skip_preflight: bool = False) -> dict:
         """
-        Run the simulation. Blocks until all events have fired or real time expires.
-        Returns a summary dict: {total, success, failed, errors}.
+        Run the simulation. Blocks until all events fire or real time expires.
+
+        Parameters
+        ----------
+        skip_preflight : bool
+            Skip preflight checks (useful in tests or CI).
+
+        Returns
+        -------
+        dict — {total, success, failed, elapsed_seconds, errors}
         """
+        if not skip_preflight and self.checks:
+            if not self.preflight():
+                return {"total": 0, "success": 0, "failed": 0,
+                        "elapsed_seconds": 0, "errors": [], "aborted": True}
+
         self.events.sort(key=lambda e: e.sim_offset_seconds)
         self.errors = []
         self._start_time = time.time()
@@ -110,12 +250,11 @@ class Kronos:
         success = 0
         for event in self.events:
             real_delay = event.sim_offset_seconds / self.compression_ratio
-            fire_at = self._start_time + real_delay
-            wait = fire_at - time.time()
+            fire_at    = self._start_time + real_delay
+            wait       = fire_at - time.time()
             if wait > 0:
                 time.sleep(wait)
-            result = self._fire(event)
-            if result:
+            if self._fire(event):
                 success += 1
 
         elapsed = time.time() - self._start_time
@@ -141,7 +280,7 @@ class Kronos:
         for ev in self.events:
             sim_date = self._sim_date(ev)
             real_secs = ev.sim_offset_seconds / ratio
-            real_ts = str(timedelta(seconds=int(real_secs)))
+            real_ts   = str(timedelta(seconds=int(real_secs)))
             print(f"  {sim_date:<14} {real_ts:>10}   {ev.description}")
 
         print(f"\n  Total: {len(self.events)} events over {self.sim_days} days "
@@ -151,8 +290,8 @@ class Kronos:
 
     def _fire(self, event: KronosEvent) -> bool:
         sim_date = self._sim_date(event)
-        elapsed = time.time() - self._start_time
-        real_ts = str(timedelta(seconds=int(elapsed)))
+        elapsed  = time.time() - self._start_time
+        real_ts  = str(timedelta(seconds=int(elapsed)))
         print(f"  [{real_ts}] Day {event.sim_day:>2} {sim_date}  ▶  {event.description}")
 
         try:
@@ -177,14 +316,8 @@ class Kronos:
         base = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         return (base + timedelta(days=event.sim_day)).strftime("%d %b %Y")
 
-    def _real_time_for_event(self, event: KronosEvent) -> str:
-        if self._start_time is None:
-            return "--:--:--"
-        fire_at = self._start_time + event.sim_offset_seconds / self.compression_ratio
-        return datetime.fromtimestamp(fire_at).strftime("%H:%M:%S")
-
     def _print_banner(self):
-        ratio = self.compression_ratio
+        ratio  = self.compression_ratio
         finish = datetime.now() + timedelta(minutes=self.real_minutes)
         print()
         print("  ┌" + "─" * 54 + "┐")
@@ -209,7 +342,7 @@ class Kronos:
         print(f"  │  Failed   : {summary['failed']:<40}│")
         print("  └" + "─" * 54 + "┘")
         print()
-        if summary["errors"]:
+        if summary.get("errors"):
             print("  ⚠  Errors:")
             for e in summary["errors"]:
                 print(f"     Day {e['sim_day']} [{e['sim_date']}] — {e['description']}")

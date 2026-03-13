@@ -4,20 +4,20 @@ Kronos CLI — run a scenario file from the command line.
 Usage:
     kronos run scenario.py --days 32 --minutes 60
     kronos preview scenario.py
+    kronos preflight scenario.py
     kronos --help
 """
 
 import argparse
 import importlib.util
 import sys
-from pathlib import Path
 from .engine import Kronos
 
 
 def load_scenario(path: str, k: Kronos):
     """Import a scenario file and call its build(k) function."""
     spec = importlib.util.spec_from_file_location("scenario", path)
-    mod = importlib.util.module_from_spec(spec)
+    mod  = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
 
     if not hasattr(mod, "build"):
@@ -36,16 +36,24 @@ def main():
 
     # ── run ──────────────────────────────────────────────────
     run_p = sub.add_parser("run", help="Run a scenario")
-    run_p.add_argument("scenario", help="Path to scenario .py file")
-    run_p.add_argument("--days",    type=int,   default=32)
-    run_p.add_argument("--minutes", type=float, default=60)
-    run_p.add_argument("--label",   type=str,   default="KRONOS")
+    run_p.add_argument("scenario",         help="Path to scenario .py file")
+    run_p.add_argument("--days",           type=int,   default=32)
+    run_p.add_argument("--minutes",        type=float, default=60)
+    run_p.add_argument("--label",          type=str,   default="KRONOS")
+    run_p.add_argument("--skip-preflight", action="store_true",
+                       help="Skip preflight checks and run immediately")
 
     # ── preview ──────────────────────────────────────────────
     prev_p = sub.add_parser("preview", help="Preview event timeline without running")
     prev_p.add_argument("scenario", help="Path to scenario .py file")
     prev_p.add_argument("--days",    type=int,   default=32)
     prev_p.add_argument("--minutes", type=float, default=60)
+
+    # ── preflight ─────────────────────────────────────────────
+    pre_p = sub.add_parser("preflight", help="Run preflight checks only, don't simulate")
+    pre_p.add_argument("scenario", help="Path to scenario .py file")
+    pre_p.add_argument("--days",    type=int,   default=32)
+    pre_p.add_argument("--minutes", type=float, default=60)
 
     args = parser.parse_args()
 
@@ -62,9 +70,14 @@ def main():
 
     if args.cmd == "preview":
         k.preview()
+
+    elif args.cmd == "preflight":
+        k.preflight(ask=False)
+
     elif args.cmd == "run":
+        skip = getattr(args, "skip_preflight", False)
         try:
-            k.run()
+            k.run(skip_preflight=skip)
         except KeyboardInterrupt:
             print("\n\n⏸  Kronos interrupted.")
 
