@@ -128,6 +128,65 @@ kronos run    examples/ecommerce/scenario.py --days 30 --minutes 30
 
 ---
 
+## Preflight checks
+
+Before the simulation starts, Kronos can scan every integration your scenario
+depends on — database, API tokens, third-party services — and tell you exactly
+what's working and what's broken. If anything is critical, the run is blocked.
+
+```python
+from kronos import Kronos
+
+def build(k: Kronos):
+
+    def check_db():
+        import pathlib
+        if not pathlib.Path("myapp.db").exists():
+            return "fail", "myapp.db not found"
+        return "ok", "database reachable"
+
+    def check_api():
+        import requests
+        try:
+            r = requests.get("https://api.example.com/ping", timeout=5)
+            return ("ok", "API reachable") if r.ok else ("fail", f"HTTP {r.status_code}")
+        except Exception as e:
+            return "warn", str(e)
+
+    k.add_check("Database", check_db)
+    k.add_check("API",      check_api)
+
+    k.schedule(1, 9, "First event", my_fn)
+```
+
+Running `kronos run scenario.py` now shows this before starting:
+
+```
+  ┌──────────────────────────────────────────────────────────────┐
+  │  KRONOS PREFLIGHT                                            │
+  ├──────────────────────────────────────────────────────────────┤
+  │  ✅  Database          database reachable                    │
+  │  ⚠️   API               timeout — retrying later             │
+  ├──────────────────────────────────────────────────────────────┤
+  │  1 warning(s) — some features may be limited.               │
+  └──────────────────────────────────────────────────────────────┘
+
+  Proceed with simulation? [Y/n]
+```
+
+```bash
+kronos preflight scenario.py        # scan only, don't simulate
+kronos run scenario.py              # preflight + simulate
+kronos run scenario.py --skip-preflight   # skip straight to simulation
+```
+
+Each check returns `("ok" | "warn" | "fail", "detail string")`:
+- **ok** — green, no action needed
+- **warn** — yellow, simulation proceeds with limited functionality
+- **fail** — red, simulation is blocked until fixed
+
+---
+
 ## API
 
 ### `Kronos(real_minutes, sim_days, label, on_event, on_error)`
@@ -140,11 +199,19 @@ kronos run    examples/ecommerce/scenario.py --days 30 --minutes 30
 | `on_event` | Callable | None | Called after every successful event: `(event, sim_date)` |
 | `on_error` | Callable | None | Called on any failed event: `(event, sim_date, exc)` |
 
+### `k.add_check(label, func)` → `Kronos`
+
+Registers a preflight check. `func()` must return `(status, detail)` where status is `"ok"`, `"warn"`, or `"fail"`. Returns self for chaining.
+
+### `k.preflight(ask=True)` → `bool`
+
+Runs all registered checks and prints the status table. If `ask=True`, prompts the user before returning. Returns `True` to proceed, `False` to abort.
+
 ### `k.schedule(day, hour, description, func)`
 
 Queues an event. `func` is called with zero arguments. Use lambda closures for parameterised calls.
 
-### `k.run()` → `dict`
+### `k.run(skip_preflight=False)` → `dict`
 
 Runs the simulation. Returns `{total, success, failed, elapsed_seconds, errors}`.
 
