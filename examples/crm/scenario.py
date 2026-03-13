@@ -2,144 +2,102 @@
 Kronos Example — CRM Pipeline Scenario
 =======================================
 Simulates 10 leads moving through a 7-stage CRM pipeline over 30 days.
-Works with any CRM that has a Python SDK or REST API.
 
-Stages: LEAD → DISCOVERY CALL → PROPOSAL SENT → NEGOTIATION
-        → PROJECT ACTIVE → DELIVERED → INVOICE SENT → CLOSED
+Uses DataFactory to generate realistic contacts, budgets, and notes.
+Uses KronosStore to write everything to a real SQLite database.
+
+No external dependencies required — pure stdlib.
 
 To run:
     kronos preview examples/crm/scenario.py --days 30 --minutes 45
     kronos run    examples/crm/scenario.py --days 30 --minutes 45
+
+After the run:
+    sqlite3 kronos_test.db "SELECT name, stage FROM kn_contacts JOIN kn_deals ON kn_contacts.id=kn_deals.contact_id;"
+
+To wipe test data:
+    python3 -c "from kronos.store import KronosStore; KronosStore().cleanup()"
 """
 
 from kronos import Kronos
+from kronos.factory import DataFactory
+from kronos.store import KronosStore
 
-CLIENTS = [
-    ("Arjun Mehta",       "arjun@mehta.in",       "Mehta & Sons",       "Brand Identity"),
-    ("Priya Sharma",      "priya@prisync.co",      "PriSync",            "E-Commerce Store"),
-    ("Vikram Nair",       "vikram@nairlogistics.in","Nair Logistics",     "Ops Dashboard"),
-    ("Sunita Rao",        "sunita@greenleaf.in",   "GreenLeaf Organics", "Marketing Site"),
-    ("Rahul Gupta",       "rahul@guptafintech.com","Gupta FinTech",      "SaaS Landing Page"),
-    ("Kavitha Menon",     "kavitha@menonarch.in",  "Menon Architecture", "Portfolio Site"),
-    ("Deepak Joshi",      "deepak@joshitravel.in", "Joshi Travel",       "Booking Platform"),
-    ("Ananya Krishnan",   "ananya@krishnanlaw.in", "Krishnan & Associates","Legal Portal"),
-    ("Rohan Malhotra",    "rohan@malhotratech.in", "Malhotra Tech",      "API Integration"),
-    ("Neha Patel",        "neha@patelwellness.in", "Patel Wellness",     "Wellness App"),
-]
-
-# ── Replace these functions with your real CRM calls ─────────────────────────
-
-def add_lead(name, email, company, project):
-    """Add a new lead to your CRM."""
-    print(f"    + Lead: {name} ({company}) — {project}")
-    # Example (HubSpot):
-    # hubspot.crm.contacts.basic_api.create(SimplePublicObjectInput(
-    #     properties={"firstname": name, "email": email, "company": company}
-    # ))
-
-def advance_stage(name, to_stage, note=""):
-    """Move a deal to the next stage."""
-    print(f"    → {name}: {to_stage}  {('| ' + note) if note else ''}")
-
-def add_note(name, note):
-    """Log a note against a deal."""
-    print(f"    📝 {name}: {note}")
-
-def send_email(name, template):
-    """Send a stage-matched email."""
-    print(f"    ✉  {name}: [{template}] email sent")
-
-# ── Build scenario ────────────────────────────────────────────────────────────
 
 def build(k: Kronos):
-    """Called by `kronos run`. Wire all events onto k."""
+    f     = DataFactory(seed=42)
+    store = KronosStore()
+    ids   = {}   # client_index → {contact_id, deal_id}
+
+    # ── Preflight ─────────────────────────────────────────────
+    k.add_check("Database", lambda: ("ok", f"kronos_test.db ready")
+                if store.summary() is not None else ("fail", "store error"))
+
+    # ── Generate 10 contacts upfront (deterministic with seed) ─
+    contacts = f.contacts(10)
 
     TIMELINE = [
-        # day  hr   client  action           note/template
-        (0,   9,   0,  "lead",    "Intro call booked"),
-        (0,   10,  1,  "lead",    "Referral from LinkedIn"),
-        (1,   9,   2,  "lead",    "Inbound enquiry"),
-        (1,   14,  3,  "lead",    "Cold outreach responded"),
-        (2,   9,   4,  "lead",    "Demo requested"),
-        (2,   11,  5,  "lead",    "Warm intro via partner"),
-        (3,   9,   6,  "lead",    "Website contact form"),
-        (3,   15,  7,  "lead",    "Trade show follow-up"),
-        (4,   9,   8,  "lead",    "Podcast listener"),
-        (4,   11,  9,  "lead",    "Old client returning"),
-
-        (3,   10,  0,  "advance", "DISCOVERY CALL"),
-        (4,   10,  1,  "advance", "DISCOVERY CALL"),
-        (5,   10,  2,  "advance", "DISCOVERY CALL"),
-        (5,   14,  3,  "advance", "DISCOVERY CALL"),
-        (6,   10,  4,  "advance", "DISCOVERY CALL"),
-
-        (6,   9,   0,  "email",   "discovery_followup"),
-        (7,   9,   1,  "email",   "discovery_followup"),
-        (7,   11,  2,  "email",   "discovery_followup"),
-
-        (8,   10,  0,  "advance", "PROPOSAL SENT"),
-        (9,   10,  1,  "advance", "PROPOSAL SENT"),
-        (9,   14,  2,  "advance", "PROPOSAL SENT"),
-        (10,  10,  3,  "advance", "DISCOVERY CALL"),
-        (11,  10,  4,  "advance", "PROPOSAL SENT"),
-        (11,  14,  5,  "advance", "DISCOVERY CALL"),
-
-        (12,  9,   0,  "advance", "NEGOTIATION"),
-        (13,  9,   1,  "advance", "NEGOTIATION"),
-        (13,  14,  2,  "advance", "NEGOTIATION"),
-        (14,  9,   0,  "note",    "Client requested 10% discount"),
-        (14,  11,  1,  "note",    "Needs phased payment plan"),
-
-        (15,  10,  0,  "advance", "PROJECT ACTIVE"),
-        (16,  10,  1,  "advance", "PROJECT ACTIVE"),
-        (16,  14,  2,  "advance", "NEGOTIATION"),
-        (17,  10,  3,  "advance", "PROPOSAL SENT"),
-        (18,  10,  4,  "advance", "PROJECT ACTIVE"),
-        (18,  14,  5,  "advance", "PROPOSAL SENT"),
-        (19,  10,  6,  "advance", "DISCOVERY CALL"),
-        (20,  10,  7,  "advance", "DISCOVERY CALL"),
-        (21,  10,  8,  "advance", "DISCOVERY CALL"),
-        (21,  14,  9,  "advance", "DISCOVERY CALL"),
-
-        (22,  9,   0,  "advance", "DELIVERED"),
-        (23,  9,   1,  "advance", "DELIVERED"),
-        (23,  14,  2,  "advance", "PROJECT ACTIVE"),
-        (24,  9,   3,  "advance", "NEGOTIATION"),
-        (24,  14,  4,  "advance", "DELIVERED"),
-
-        (25,  9,   0,  "advance", "INVOICE SENT"),
-        (25,  14,  0,  "email",   "invoice"),
-        (26,  9,   1,  "advance", "INVOICE SENT"),
-        (26,  14,  1,  "email",   "invoice"),
-        (27,  9,   2,  "advance", "INVOICE SENT"),
-        (27,  14,  2,  "email",   "invoice"),
-
-        (28,  9,   0,  "advance", "CLOSED"),
-        (28,  14,  0,  "email",   "closed_thankyou"),
-        (29,  9,   1,  "advance", "CLOSED"),
-        (29,  14,  1,  "email",   "closed_thankyou"),
-        (30,  9,   2,  "advance", "CLOSED"),
+        (0,  9,  0, "lead",    ""), (0,  11, 1, "lead",    ""),
+        (1,  9,  2, "lead",    ""), (1,  14, 3, "lead",    ""),
+        (2,  9,  4, "lead",    ""), (2,  11, 5, "lead",    ""),
+        (3,  9,  6, "lead",    ""), (3,  15, 7, "lead",    ""),
+        (4,  9,  8, "lead",    ""), (4,  11, 9, "lead",    ""),
+        (3,  10, 0, "advance", "DISCOVERY CALL"),
+        (4,  10, 1, "advance", "DISCOVERY CALL"),
+        (5,  10, 2, "advance", "DISCOVERY CALL"),
+        (5,  14, 3, "advance", "DISCOVERY CALL"),
+        (6,  10, 4, "advance", "DISCOVERY CALL"),
+        (4,  15, 0, "note",    ""),
+        (5,  15, 1, "note",    ""),
+        (8,  10, 0, "advance", "PROPOSAL SENT"),
+        (9,  10, 1, "advance", "PROPOSAL SENT"),
+        (9,  14, 2, "advance", "PROPOSAL SENT"),
+        (11, 10, 4, "advance", "PROPOSAL SENT"),
+        (13, 9,  0, "advance", "NEGOTIATION"),
+        (13, 14, 1, "advance", "NEGOTIATION"),
+        (14, 9,  2, "advance", "NEGOTIATION"),
+        (14, 11, 0, "note",    ""),
+        (15, 10, 0, "advance", "PROJECT ACTIVE"),
+        (16, 10, 1, "advance", "PROJECT ACTIVE"),
+        (18, 10, 4, "advance", "PROJECT ACTIVE"),
+        (22, 9,  0, "advance", "DELIVERED"),
+        (23, 9,  1, "advance", "DELIVERED"),
+        (24, 14, 4, "advance", "DELIVERED"),
+        (25, 9,  0, "advance", "INVOICE SENT"),
+        (26, 9,  1, "advance", "INVOICE SENT"),
+        (27, 9,  2, "advance", "INVOICE SENT"),
+        (28, 9,  0, "advance", "CLOSED"),
+        (29, 9,  1, "advance", "CLOSED"),
+        (30, 9,  2, "advance", "CLOSED"),
     ]
 
-    for (day, hour, ci, action, note) in TIMELINE:
-        name, email, company, project = CLIENTS[ci]
+    for day, hour, ci, action, extra in TIMELINE:
+        c = contacts[ci]
 
         if action == "lead":
-            k.schedule(day, hour,
-                f"New lead: {name} ({company})",
-                lambda n=name, e=email, c=company, p=project: add_lead(n, e, c, p))
+            def _onboard(ci=ci, c=c):
+                cid = store.add_contact(c)
+                did = store.add_deal(cid, stage="LEAD", project=c["project"],
+                                     budget=c["budget"], next_action=c["next_action"])
+                ids[ci] = {"contact_id": cid, "deal_id": did}
+                print(f"           + {c['name']} ({c['company']}) — {c['project']} [budget: {c['budget']:,}]")
+            k.schedule(day, hour, f"New lead: {c['name']}", _onboard)
 
         elif action == "advance":
-            k.schedule(day, hour,
-                f"Advance → {note}: {name}",
-                lambda n=name, s=note: advance_stage(n, s))
+            def _advance(ci=ci, c=c, stage=extra):
+                if ci not in ids: return
+                note = f.crm_note(stage)
+                store.advance_deal(ids[ci]["deal_id"], stage, note)
+                print(f"           → {c['name']}: {stage}  | {note}")
+            k.schedule(day, hour, f"Advance → {extra}: {c['name']}", _advance)
 
         elif action == "note":
-            k.schedule(day, hour,
-                f"Note on {name}",
-                lambda n=name, nt=note: add_note(n, nt))
+            def _note(ci=ci, c=c):
+                if ci not in ids: return
+                stage = store.get_deal_stage(ids[ci]["deal_id"])
+                note  = f.crm_note(stage)
+                store.add_note(ids[ci]["deal_id"], note)
+                print(f"           📝 {c['name']}: {note}")
+            k.schedule(day, hour, f"Note: {c['name']}", _note)
 
-        elif action == "email":
-            k.schedule(day, hour,
-                f"Email [{note}] → {name}",
-                lambda n=name, t=note: send_email(n, t))
+    k.schedule(30, 23.9, "Run summary", lambda: store.print_summary())
